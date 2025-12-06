@@ -1,8 +1,20 @@
 # install-winget
 
-Action to install latest [winget-cli](https://github.com/microsoft/winget-cli) on Windows runners
+Action to install [winget-cli](https://github.com/microsoft/winget-cli) default v1.8.1911 on Windows runners. Other versions can be installed by changing `wget_release_id` parameter.
 
-Currently only supports `windows-2022`/`window-latest` runner image.
+Currently only supports `windows-2022` runner image.
+
+# DEPRECATION NOTICE
+
+The `windows-2025` GitHub actions runner image now comes preinstalled with `winget`. If the version packaged needs to be upgraded, it can be done with the following command.
+
+```
+winget upgrade winget --accept-package-agreements --accept-source-agreements --disable-interactivity
+```
+
+This action will continue to work in its previous capacity on `windows-2022` images. `windows-2025` will not be supported.
+
+Thank you a so much for using my crappy hack action.
 
 ## Usage
 
@@ -22,10 +34,25 @@ jobs:
     steps:
     - name: Install winget
       uses: Cyberboss/install-winget@v1
+      with:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        wget_release_id: latest
 
     - name: Install wingetcreate
       run: winget install wingetcreate --disable-interactivity --accept-source-agreements
 ```
+
+### Inputs
+
+#### `GITHUB_TOKEN` (Optional)
+
+The GitHub token to use when interacting with the GitHub API. Used to bypass unauthenticated rate limits.
+
+**Recommendation is to set this to ${{ secrets.GITHUB_TOKEN }} or some other available token** as GitHub runners tend to often come with exhausted rate limits.
+
+#### `wget_release_id` (Optional)
+
+This is used to be able to pin (make immutable) the version of winget that is taken github. To see which versions (you need the release-id) is possible to use plese check the github API for the release of [winget-cli](https://github.com/microsoft/winget-cli) this can be checked by looking for the topmost `id:` attribute here: https://api.github.com/repos/microsoft/winget-cli/releases . 
 
 ### Outputs
 

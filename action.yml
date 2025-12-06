@@ -1,43 +1,159 @@
 name: Install winget
-description: Installs the latest version of winget
+description: Installs a version of winget
 author: Dominion/Cyberboss
 branding:
   icon: arrow-down-circle
   color: blue
+inputs:
+  GITHUB_TOKEN:
+    description: 'No scopes GitHub token for querying the API and downloading from winget-cli releases'
+    required: false
+    default: 'NONE'
+  wget_release_id:
+    description: 'Specify desired release-id of winget can be specified here. By default, a recent stable release will be selected by the action author. To see what versions are available, look into https://api.github.com/repos/microsoft/winget-cli/releases'
+    required: false
+    default: '164835566' # latest can be used here
+
 outputs:
   winget-version:
     description: "The version of winget installed"
     value: ${{ steps.winget-version.outputs.winget-version }}
 runs:
+# Hacked together https://github.com/microsoft/winget-cli/issues/1861#issuecomment-1352784247
+# https://github.com/microsoft/winget-cli/issues/700#issuecomment-874084714
   using: composite
   steps:
-    - name: Install winget # Hacked together https://github.com/microsoft/winget-cli/issues/1861#issuecomment-1352784247
-      shell: powershell    # https://github.com/microsoft/winget-cli/issues/700#issuecomment-874084714
+    - name: Check runner OS is Windows
+      if: runner.os != 'Windows'
+      shell: bash
       run: |
-        Invoke-WebRequest -Uri https://www.nuget.org/api/v2/package/Microsoft.UI.Xaml/2.7.3 -OutFile .\microsoft.ui.xaml.2.7.3.zip
-        Expand-Archive .\microsoft.ui.xaml.2.7.3.zip
-        Add-AppxPackage .\microsoft.ui.xaml.2.7.3\tools\AppX\x64\Release\Microsoft.UI.Xaml.2.7.appx
-        $progressPreference = 'silentlyContinue'
-        $wingetReleaseAssets = $latestWingetMsixBundleUri = $(Invoke-RestMethod https://api.github.com/repos/microsoft/winget-cli/releases/latest).assets
-        $latestWingetMsixBundleUri = $wingetReleaseAssets.browser_download_url | Where-Object {$_.EndsWith(".msixbundle")}
-        $latestWingetMsixBundle = $latestWingetMsixBundleUri.Split("/")[-1]
-        $latestWingetLicenseXmlUri = $wingetReleaseAssets.browser_download_url | Where-Object {$_.EndsWith("License1.xml")}
-        $latestWingetLicenseXml = $latestWingetLicenseXmlUri.Split("/")[-1]
-        Write-Information "Downloading winget to artifacts directory..."
-        Invoke-WebRequest -Uri $latestWingetMsixBundleUri -OutFile "./$latestWingetMsixBundle"
+        echo "[ERROR] This action only runs on Windows runner, Current runner: ${{ runner.os }}"
+        exit 1
+
+    - name: Check OS Version
+      shell: powershell
+      id: os_check
+      run: |
+        $version = (Get-WmiObject Win32_OperatingSystem).Caption
+        echo "version=${version}" >> $env:GITHUB_OUTPUT
+        echo $version
+
+    - name: Windows Server 2025 Simple Setup
+      if: steps.os_check.outputs.version != 'Microsoft Windows Server 2022 Datacenter'
+      shell: powershell
+      run: winget upgrade winget --accept-package-agreements --accept-source-agreements --disable-interactivity
+
+    - name: Download Microsoft.UI.Xaml v2.8.6
+      if: steps.os_check.outputs.version == 'Microsoft Windows Server 2022 Datacenter'
+      shell: powershell
+      run: |
+        $ProgressPreference = 'SilentlyContinue'
+        Invoke-WebRequest -Uri https://www.nuget.org/api/v2/package/Microsoft.UI.Xaml/2.8.6 -OutFile .\microsoft.ui.xaml.2.8.6.zip
+
+    - name: Unzip Microsoft.UI.Xaml v2.8.6
+      if: steps.os_check.outputs.version == 'Microsoft Windows Server 2022 Datacenter'
+      shell: powershell
+      run: |
+        Expand-Archive .\microsoft.ui.xaml.2.8.6.zip
+
+    - name: Download Microsoft.VCLibs.x64.14.00.Desktop
+      if: steps.os_check.outputs.version == 'Microsoft Windows Server 2022 Datacenter'
+      shell: powershell
+      run: |
+        $ProgressPreference = 'SilentlyContinue'
         Invoke-WebRequest -Uri https://aka.ms/Microsoft.VCLibs.x64.14.00.Desktop.appx -OutFile Microsoft.VCLibs.x64.14.00.Desktop.appx
-        Invoke-WebRequest -Uri $latestWingetLicenseXmlUri -OutFile "./$latestWingetLicenseXml"
+
+    - name: Determine Latest winget release via GitHub API
+      if: steps.os_check.outputs.version == 'Microsoft Windows Server 2022 Datacenter'
+      id: github_api
+      shell: powershell
+      run: |
+        $ProgressPreference = 'SilentlyContinue'
+        if ("${{ inputs.GITHUB_TOKEN }}" -ne "NONE") {
+          $headers = @{ "Authorization" = "Bearer ${{ inputs.GITHUB_TOKEN }}" }
+          Write-Host "Token present"
+        } else {
+          $headers = @{}
+          Write-Host "No token present"
+        }
+
+        $releaseURL = "https://api.github.com/repos/microsoft/winget-cli/releases/${{ inputs.wget_release_id }}"
+        $gitHubReleasesResponse = Invoke-RestMethod $releaseURL -Headers $headers
+        $wingetReleaseAssets = $gitHubReleasesResponse.assets
+        $latestWingetMsixBundleUri = $wingetReleaseAssets.browser_download_url | Where-Object {$_.EndsWith(".msixbundle")}
+        $latestWingetLicenseXmlUri = $wingetReleaseAssets.browser_download_url | Where-Object {$_.EndsWith("License1.xml")}
+        Write-Host "latest_winget_msix_bundle_uri=$latestWingetMsixBundleUri"
+        Write-Host "latest_winget_license_xml_uri=$latestWingetLicenseXmlUri"
+        Write-Output "latest_winget_msix_bundle_uri=$latestWingetMsixBundleUri" >> $Env:GITHUB_OUTPUT
+        Write-Output "latest_winget_license_xml_uri=$latestWingetLicenseXmlUri" >> $Env:GITHUB_OUTPUT
+
+    - name: Download winget
+      if: steps.os_check.outputs.version == 'Microsoft Windows Server 2022 Datacenter'
+      shell: powershell
+      run: |
+        $ProgressPreference = 'SilentlyContinue'
+        Invoke-WebRequest -Headers $headers -Uri "${{ steps.github_api.outputs.latest_winget_msix_bundle_uri }}" -OutFile "./winget.msixbundle"
+
+    - name: Download License
+      if: steps.os_check.outputs.version == 'Microsoft Windows Server 2022 Datacenter'
+      shell: powershell
+      run: |
+        $ProgressPreference = 'SilentlyContinue'
+        Invoke-WebRequest -Headers $headers -Uri "${{ steps.github_api.outputs.latest_winget_license_xml_uri }}" -OutFile "./winget_License1.xml"
+
+    - name: Install Microsoft.UI.Xaml v2.8.6
+      if: steps.os_check.outputs.version == 'Microsoft Windows Server 2022 Datacenter'
+      shell: powershell
+      run: |
+        Add-AppxPackage .\microsoft.ui.xaml.2.8.6\tools\AppX\x64\Release\Microsoft.UI.Xaml.2.8.appx
+
+    - name: Install Microsoft.VCLibs.x64.14.00.Desktop
+      if: steps.os_check.outputs.version == 'Microsoft Windows Server 2022 Datacenter'
+      shell: powershell
+      run: |
         Add-AppxPackage Microsoft.VCLibs.x64.14.00.Desktop.appx
-        Add-AppxProvisionedPackage -Online -PackagePath ./$latestWingetMsixBundle -LicensePath ./$latestWingetLicenseXml
+
+    - name: Install winget
+      if: steps.os_check.outputs.version == 'Microsoft Windows Server 2022 Datacenter'
+      shell: powershell
+      run: |
+        echo "PROVISIONING WINGET"
+        Add-AppxProvisionedPackage -Online -PackagePath ./winget.msixbundle -LicensePath ./winget_License1.xml
+
+    - name: Installing Winget
+      if: steps.os_check.outputs.version == 'Microsoft Windows Server 2022 Datacenter'
+      shell: powershell
+      run: |
+        echo "INSTALLING WINGET"
+        $ProgressPreference = 'SilentlyContinue'
+        Add-AppxPackage .\winget.msixbundle
+
+    - name: Cleanup Downloads
+      if: steps.os_check.outputs.version == 'Microsoft Windows Server 2022 Datacenter'
+      shell: powershell
+      run: |
         rm Microsoft.VCLibs.x64.14.00.Desktop.appx
-        rm $latestWingetMsixBundle
-        rm $latestWingetLicenseXml
+        rm ./winget_License1.xml
+        rm ./winget.msixbundle
+        Remove-Item -Recurse -Force .\microsoft.ui.xaml.2.8.6
+
+    - name: Wait to allow Installation to Finalize
+      if: steps.os_check.outputs.version == 'Microsoft Windows Server 2022 Datacenter'
+      shell: powershell
+      run: |
+        foreach ($i in 1..60) {
+          Start-Sleep -Seconds 1
+          Write-Host "Waiting for winget to install... ${i}"
+          if (Get-Command winget -ErrorAction SilentlyContinue) {
+            break
+          }
+        }
 
     - name: Output winget Version
       id: winget-version
-      shell: bash
+      shell: powershell
       run: |
-        VERSION=$(winget --version)
-        echo "$VERSION"
-        echo "winget-version=$(echo $VERSION)" >> $GITHUB_OUTPUT
-        
+        $version=winget --version
+        Write-Host "$version"
+        Write-Output "winget-version=$version" >> $Env:GITHUB_OUTPUT
+
